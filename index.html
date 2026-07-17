@@ -322,7 +322,6 @@ App.register('dashboard', {
       <div class="dash-quickadd">
         <input type="text" placeholder="Quick add a task…" aria-label="Quick add a task">
         <button type="button" class="btn btn-primary dash-add-btn">Add</button>
-        <button type="button" class="btn dash-voice-btn" aria-label="Voice input">🎤</button>
       </div>
     `;
 
@@ -349,7 +348,6 @@ App.register('dashboard', {
     };
     el.querySelector('.dash-add-btn').addEventListener('click', addTask);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addTask(); });
-    el.querySelector('.dash-voice-btn').addEventListener('click', () => App.ui.showTab('voice'));
 
     // Delegated taps for all dynamic cards
     el.querySelector('.dash-cards').addEventListener('click', (e) => {
@@ -2373,317 +2371,31 @@ App.register('timer', (function () {
     },
   };
 })());
-/* ============ VOICE — dictate tasks by speech ============ */
-App.register('voice', {
-  title: 'Voice',
-  icon: '🎤',
-  order: 7,
-  styles: `
-    #view-voice .voice-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 4px; }
-    #view-voice .mic-zone { position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; }
-    #view-voice .mic-btn {
-      width: 96px; height: 96px; border-radius: 50%;
-      border: 2px solid var(--accent); background: var(--card); color: var(--text);
-      font-size: 40px; line-height: 1; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      position: relative; z-index: 1;
-      transition: background .2s, border-color .2s;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #view-voice .mic-btn.listening { background: var(--accent); border-color: var(--accent); }
-    #view-voice .mic-ring {
-      position: absolute; inset: 0; border-radius: 50%;
-      border: 3px solid var(--accent); opacity: 0; pointer-events: none;
-    }
-    #view-voice.is-listening .mic-ring { animation: voice-pulse 1.4s ease-out infinite; }
-    #view-voice .mic-ring.r2 { animation-delay: .7s !important; }
-    @keyframes voice-pulse {
-      0%   { transform: scale(.8); opacity: .8; }
-      100% { transform: scale(1.35); opacity: 0; }
-    }
-    #view-voice .voice-hint { color: var(--muted); font-size: 14px; text-align: center; min-height: 20px; }
-    #view-voice .voice-interim {
-      color: var(--muted); font-style: italic; font-size: 15px; text-align: center;
-      min-height: 22px; max-width: 100%; word-break: break-word; padding: 0 8px;
-    }
-    #view-voice .voice-error { color: var(--bad); font-size: 14px; text-align: center; padding: 0 8px; }
-    #view-voice .confirm-card { width: 100%; box-sizing: border-box; display: none; flex-direction: column; gap: 10px; padding: 14px; }
-    #view-voice .confirm-card.show { display: flex; }
-    #view-voice .confirm-card label { color: var(--muted); font-size: 13px; }
-    #view-voice .confirm-input {
-      width: 100%; box-sizing: border-box; min-height: 44px;
-      background: var(--bg); color: var(--text); border: 1px solid #2a3040;
-      border-radius: var(--radius); padding: 10px 12px; font-size: 16px;
-    }
-    #view-voice .confirm-actions { display: flex; gap: 10px; }
-    #view-voice .confirm-actions .btn { flex: 1; min-height: 44px; }
-    #view-voice .fallback-card { width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; padding: 14px; }
-    #view-voice .fallback-row { display: flex; gap: 8px; }
-    #view-voice .fallback-row input {
-      flex: 1; min-height: 44px; box-sizing: border-box;
-      background: var(--bg); color: var(--text); border: 1px solid #2a3040;
-      border-radius: var(--radius); padding: 10px 12px; font-size: 16px;
-    }
-    #view-voice .fallback-row .btn { min-height: 44px; min-width: 72px; }
-    #view-voice .after-add { display: none; }
-    #view-voice .after-add.show { display: block; }
-    #view-voice .link-btn {
-      background: none; border: none; color: var(--accent); font-size: 14px;
-      padding: 12px; min-height: 44px; cursor: pointer; text-decoration: underline;
-    }
-    #view-voice .recent { width: 100%; box-sizing: border-box; }
-    #view-voice .recent h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
-    #view-voice .recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-    #view-voice .recent li {
-      background: var(--card); border-radius: var(--radius); padding: 12px;
-      font-size: 15px; display: flex; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box;
-      word-break: break-word;
-    }
-    #view-voice .recent li .done-mark { color: var(--good); }
-    #view-voice .recent .empty { color: var(--muted); font-size: 14px; padding: 6px 2px; }
-  `,
-
-  _sessionIds: [],   // ids of tasks created by voice this session (newest first)
-  _rec: null,        // active SpeechRecognition instance
-  _listening: false,
-  _els: null,
-  _lastAddedId: null,
-
-  render(el) {
-    const self = this;
-    const SR = (typeof window !== 'undefined') && (window.SpeechRecognition || window.webkitSpeechRecognition);
-
-    el.innerHTML = `
-      <div class="voice-wrap">
-        <div class="mic-zone">
-          <div class="mic-ring"></div>
-          <div class="mic-ring r2"></div>
-          <button type="button" class="mic-btn" id="voice-mic" aria-label="Start dictation">🎤</button>
-        </div>
-        <div class="voice-hint" id="voice-hint">Tap the mic and say your to-do</div>
-        <div class="voice-interim" id="voice-interim"></div>
-        <div class="voice-error" id="voice-error"></div>
-        <div class="card confirm-card" id="voice-confirm">
-          <label for="voice-confirm-input">Heard this — edit if needed:</label>
-          <input type="text" class="confirm-input" id="voice-confirm-input" autocomplete="off">
-          <div class="confirm-actions">
-            <button type="button" class="btn btn-primary" id="voice-add">Add as task</button>
-            <button type="button" class="btn" id="voice-discard">Discard</button>
-          </div>
-        </div>
-        <div class="card fallback-card" id="voice-fallback" style="display:none">
-          <label for="voice-fallback-input">Dictation isn't available here — type your to-do instead</label>
-          <div class="fallback-row">
-            <input type="text" id="voice-fallback-input" autocomplete="off" placeholder="e.g. Buy milk">
-            <button type="button" class="btn btn-primary" id="voice-fallback-add">Add</button>
-          </div>
-        </div>
-        <div class="after-add" id="voice-after">
-          <button type="button" class="link-btn" id="voice-view-task">View in Tasks →</button>
-        </div>
-        <div class="recent" id="voice-recent"></div>
-      </div>
-    `;
-
-    const els = this._els = {
-      root: el,
-      mic: el.querySelector('#voice-mic'),
-      hint: el.querySelector('#voice-hint'),
-      interim: el.querySelector('#voice-interim'),
-      error: el.querySelector('#voice-error'),
-      confirm: el.querySelector('#voice-confirm'),
-      confirmInput: el.querySelector('#voice-confirm-input'),
-      add: el.querySelector('#voice-add'),
-      discard: el.querySelector('#voice-discard'),
-      fallback: el.querySelector('#voice-fallback'),
-      fallbackInput: el.querySelector('#voice-fallback-input'),
-      fallbackAdd: el.querySelector('#voice-fallback-add'),
-      after: el.querySelector('#voice-after'),
-      viewTask: el.querySelector('#voice-view-task'),
-      recent: el.querySelector('#voice-recent'),
-    };
-
-    // ----- helpers -----
-    function setListening(on) {
-      self._listening = on;
-      els.root.classList.toggle('is-listening', on);
-      els.mic.classList.toggle('listening', on);
-      els.mic.setAttribute('aria-label', on ? 'Stop dictation' : 'Start dictation');
-      els.hint.textContent = on ? 'Listening… tap to stop' : 'Tap the mic and say your to-do';
-      if (!on) els.interim.textContent = '';
-    }
-
-    function showConfirm(text) {
-      text = (text || '').trim();
-      if (!text) return;
-      els.confirmInput.value = text;
-      els.confirm.classList.add('show');
-      els.after.classList.remove('show');
-    }
-
-    function createTask(title) {
-      title = (title || '').trim();
-      if (!title) { App.ui.toast('Nothing to add'); return null; }
-      const task = {
-        id: App.util.uuid(),
-        title: title,
-        detail: '',
-        due: null,
-        priority: 'med',
-        status: 'todo',
-        createdAt: new Date().toISOString(),
-        completedAt: null,
-        focusedMinutes: 0,
-        noteIds: [],
-        alarmDismissed: false,
-      };
-      App.store.data.tasks.push(task);
-      self._sessionIds.unshift(task.id);
-      if (self._sessionIds.length > 5) self._sessionIds.length = 5;
-      self._lastAddedId = task.id;
-      App.store.save(); // triggers onDataChanged -> renders recent list
-      App.ui.toast('Task added');
-      els.after.classList.add('show');
-      return task;
-    }
-
-    // ----- confirm box -----
-    els.add.addEventListener('click', () => {
-      const t = createTask(els.confirmInput.value);
-      if (t) {
-        els.confirmInput.value = '';
-        els.confirm.classList.remove('show');
-      }
-    });
-    els.discard.addEventListener('click', () => {
-      els.confirmInput.value = '';
-      els.confirm.classList.remove('show');
-      els.after.classList.remove('show');
-    });
-
-    // ----- "View in Tasks" -----
-    els.viewTask.addEventListener('click', () => {
-      if (!self._lastAddedId) return;
-      App.ui.showTab('tasks');
-      App.bus.emit('task:open', { taskId: self._lastAddedId });
-    });
-
-    // ----- speech recognition or fallback -----
-    if (SR) {
-      els.mic.addEventListener('click', () => {
-        if (self._listening) {
-          // tap again to stop — onresult/onend will deliver whatever was heard
-          try { self._rec && self._rec.stop(); } catch (e) { /* noop */ }
-          return;
-        }
-        els.error.textContent = '';
-        els.after.classList.remove('show');
-        let rec;
-        try {
-          rec = new SR();
-        } catch (e) {
-          els.error.textContent = "Couldn't start dictation on this device.";
-          return;
-        }
-        self._rec = rec;
-        rec.continuous = false;
-        rec.interimResults = true;
-        rec.lang = (typeof navigator !== 'undefined' && navigator.language) || 'en-US';
-
-        let finalText = '';
-
-        rec.onresult = (ev) => {
-          let interim = '';
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            const r = ev.results[i];
-            const txt = (r[0] && r[0].transcript) || '';
-            if (r.isFinal) finalText += txt;
-            else interim += txt;
-          }
-          els.interim.textContent = interim || finalText;
-        };
-
-        rec.onerror = (ev) => {
-          const code = ev && ev.error;
-          if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
-            els.error.textContent = 'Microphone permission needed — check Settings › Safari';
-          } else if (code === 'no-speech') {
-            els.error.textContent = "Didn't catch anything — try again.";
-          } else if (code !== 'aborted') {
-            els.error.textContent = 'Dictation error — please try again.';
-          }
-        };
-
-        rec.onend = () => {
-          setListening(false);
-          self._rec = null;
-          if (finalText.trim()) showConfirm(finalText);
-        };
-
-        try {
-          rec.start();
-          setListening(true);
-        } catch (e) {
-          setListening(false);
-          self._rec = null;
-          els.error.textContent = "Couldn't start dictation — please try again.";
-        }
-      });
-    } else {
-      // no SpeechRecognition: same page, typed input instead
-      els.fallback.style.display = '';
-      els.hint.textContent = '';
-      els.mic.disabled = true;
-      els.mic.style.opacity = '0.45';
-      els.mic.addEventListener('click', () => {
-        App.ui.toast("Dictation isn't available here — type your to-do instead");
-      });
-      const addTyped = () => {
-        // still route through the confirm box so behavior matches the voice path
-        const v = (els.fallbackInput.value || '').trim();
-        if (!v) { App.ui.toast('Type something first'); return; }
-        els.fallbackInput.value = '';
-        showConfirm(v);
-      };
-      els.fallbackAdd.addEventListener('click', addTyped);
-      els.fallbackInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addTyped(); });
-    }
-
-    this._renderRecent();
-  },
-
-  onDataChanged() {
-    this._renderRecent();
-  },
-
-  _renderRecent() {
-    const els = this._els;
-    if (!els || !els.recent) return;
-    const esc = App.util.esc;
-    // keep only ids that still exist (tasks may be deleted elsewhere)
-    const byId = {};
-    for (const t of App.store.data.tasks) byId[t.id] = t;
-    this._sessionIds = this._sessionIds.filter(id => byId[id]);
-    const items = this._sessionIds.slice(0, 5).map(id => byId[id]);
-
-    let html = '<h3>Captured this session</h3>';
-    if (!items.length) {
-      html += '<div class="empty">Nothing captured yet — your dictated tasks will show up here.</div>';
-      els.recent.innerHTML = html;
-      return;
-    }
-    html += '<ul>' + items.map(t =>
-      '<li>' + (t.status === 'done' ? '<span class="done-mark">✓</span>' : '<span>•</span>') +
-      '<span>' + esc(t.title) + '</span></li>'
-    ).join('') + '</ul>';
-    els.recent.innerHTML = html;
-  },
-});
 App.register('shopping', {
   title: 'Shop',
   icon: '🛒',
   order: 8,
   styles: `
+    #view-shopping .shop-chips { display:flex; gap:8px; overflow-x:auto; padding:2px 2px 10px;
+      -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+    #view-shopping .shop-chips::-webkit-scrollbar { display:none; }
+    #view-shopping .shop-chip { flex:0 0 auto; min-height:44px; padding:0 14px; border-radius:22px;
+      border:1px solid rgba(255,255,255,0.15); background:var(--card); color:var(--text);
+      font-size:14px; cursor:pointer; white-space:nowrap; }
+    #view-shopping .shop-chip.active { border-color:var(--accent); background:var(--accent);
+      color:#0f1115; font-weight:600; }
+    #view-shopping .shop-chip .chip-count { opacity:0.75; margin-left:6px; font-size:12px; }
+    #view-shopping .shop-chip.new { color:var(--muted); border-style:dashed; background:none; }
+    #view-shopping .shop-newlist { flex:0 0 auto; display:flex; gap:6px; align-items:center; }
+    #view-shopping .shop-newlist input { min-height:44px; border-radius:22px; width:150px;
+      padding:0 12px; box-sizing:border-box; }
+    #view-shopping .shop-panel { background:var(--card); border:1px solid rgba(255,255,255,0.1);
+      border-radius:var(--radius); padding:10px; margin-bottom:12px; display:flex;
+      flex-direction:column; gap:8px; }
+    #view-shopping .shop-panel .shop-panel-row { display:flex; gap:8px; }
+    #view-shopping .shop-panel input { flex:1; min-height:44px; border-radius:8px; }
+    #view-shopping .shop-panel .btn { min-height:44px; }
+    #view-shopping .shop-panel .btn.confirming { color:var(--bad); border-color:var(--bad); }
     #view-shopping .shop-addbar { display:flex; gap:8px; margin-bottom:12px; }
     #view-shopping .shop-addbar input { flex:1; min-height:44px; border-radius:var(--radius); }
     #view-shopping .shop-addbar .btn { min-height:44px; }
@@ -2718,10 +2430,17 @@ App.register('shopping', {
   _confirmClear: false,
   _confirmT: null,
   _editingId: null,
+  _activeListId: null,   // module-local, not persisted
+  _panelOpen: false,
+  _newListOpen: false,
+  _confirmDelete: false,
+  _confirmDelT: null,
 
   render(el) {
     this._el = el;
     el.innerHTML = `
+      <div class="shop-chips" id="shop-chips"></div>
+      <div id="shop-panel-wrap"></div>
       <div class="shop-addbar">
         <input type="text" id="shop-add-input" placeholder="Add items (comma-separate for several)" autocomplete="off">
         <button type="button" class="btn btn-primary" id="shop-add-btn">Add</button>
@@ -2735,9 +2454,11 @@ App.register('shopping', {
     const doAdd = () => {
       const parts = input.value.split(',').map(s => s.trim()).filter(Boolean);
       if (!parts.length) return;
+      const listId = this._activeListId;
+      if (!listId) return;
       for (const text of parts) {
         App.store.data.shopping.push({
-          id: App.util.uuid(), text, done: false, createdAt: new Date().toISOString(),
+          id: App.util.uuid(), text, done: false, createdAt: new Date().toISOString(), listId,
         });
       }
       input.value = '';
@@ -2747,10 +2468,204 @@ App.register('shopping', {
     };
     addBtn.addEventListener('click', doAdd);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
+    this._renderAll();
+  },
+
+  onDataChanged() { this._renderAll(); },
+
+  // Ensure settings.shoppingLists exists and every item has a valid listId.
+  // Returns true if anything changed (caller must save). Idempotent.
+  _migrate() {
+    const d = App.store.data;
+    if (!d.settings || typeof d.settings !== 'object') d.settings = {};
+    let changed = false;
+    if (!Array.isArray(d.settings.shoppingLists) || !d.settings.shoppingLists.length) {
+      d.settings.shoppingLists = [{ id: App.util.uuid(), name: 'Groceries' }];
+      changed = true;
+    }
+    const ids = new Set(d.settings.shoppingLists.map(l => l.id));
+    const firstId = d.settings.shoppingLists[0].id;
+    for (const item of (d.shopping || [])) {
+      if (!item.listId || !ids.has(item.listId)) { item.listId = firstId; changed = true; }
+    }
+    return changed;
+  },
+
+  _lists() { return App.store.data.settings.shoppingLists; },
+
+  _renderAll() {
+    const el = this._el;
+    if (!el) return;
+    if (this._migrate()) { App.store.save(); return; } // save re-enters via onDataChanged
+    const lists = this._lists();
+    if (!this._activeListId || !lists.some(l => l.id === this._activeListId)) {
+      this._activeListId = lists[0].id;
+      this._panelOpen = false;
+      this._confirmDelete = false;
+      this._editingId = null;
+      this._confirmClear = false;
+    }
+    this._renderChips();
+    this._renderPanel();
     this._renderList();
   },
 
-  onDataChanged() { this._renderList(); },
+  _switchList(id) {
+    this._activeListId = id;
+    this._panelOpen = false;
+    this._newListOpen = false;
+    this._confirmDelete = false;
+    this._editingId = null;
+    this._confirmClear = false;
+    this._renderAll();
+  },
+
+  _renderChips() {
+    const wrap = this._el.querySelector('#shop-chips');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const items = App.store.data.shopping || [];
+    for (const list of this._lists()) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      const active = list.id === this._activeListId;
+      chip.className = 'shop-chip' + (active ? ' active' : '');
+      const count = items.filter(i => i.listId === list.id && !i.done).length;
+      chip.innerHTML = App.util.esc(list.name) + '<span class="chip-count">' + count + '</span>';
+      chip.addEventListener('click', () => {
+        if (list.id === this._activeListId) {
+          this._panelOpen = !this._panelOpen;
+          this._confirmDelete = false;
+          this._renderAll();
+        } else {
+          this._switchList(list.id);
+        }
+      });
+      wrap.appendChild(chip);
+    }
+
+    if (this._newListOpen) {
+      const box = document.createElement('div');
+      box.className = 'shop-newlist';
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'List name';
+      inp.autocomplete = 'off';
+      let closed = false;
+      const commit = () => {
+        if (closed) return;
+        closed = true;
+        this._newListOpen = false;
+        const name = inp.value.trim();
+        if (name) {
+          const list = { id: App.util.uuid(), name };
+          this._lists().push(list);
+          this._activeListId = list.id;
+          this._panelOpen = false;
+          App.store.save();
+          App.ui.toast('List created');
+        } else {
+          this._renderAll();
+        }
+      };
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') commit();
+        else if (e.key === 'Escape') { closed = true; this._newListOpen = false; this._renderAll(); }
+      });
+      inp.addEventListener('blur', commit);
+      box.appendChild(inp);
+      wrap.appendChild(box);
+      setTimeout(() => { try { inp.focus(); } catch (e) {} }, 0);
+    } else {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'shop-chip new';
+      add.textContent = '+ New list';
+      add.addEventListener('click', () => {
+        this._newListOpen = true;
+        this._panelOpen = false;
+        this._renderAll();
+      });
+      wrap.appendChild(add);
+    }
+  },
+
+  _renderPanel() {
+    const wrap = this._el.querySelector('#shop-panel-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    if (!this._panelOpen) { this._confirmDelete = false; return; }
+    const lists = this._lists();
+    const list = lists.find(l => l.id === this._activeListId);
+    if (!list) return;
+
+    const panel = document.createElement('div');
+    panel.className = 'shop-panel';
+
+    // rename row
+    const row = document.createElement('div');
+    row.className = 'shop-panel-row';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = list.name;
+    inp.autocomplete = 'off';
+    inp.setAttribute('aria-label', 'Rename list');
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-primary';
+    saveBtn.textContent = 'Rename';
+    const commitRename = () => {
+      const name = inp.value.trim();
+      if (name && name !== list.name) {
+        list.name = name;
+        this._panelOpen = false;
+        App.store.save();
+        App.ui.toast('List renamed');
+      } else {
+        this._panelOpen = false;
+        this._renderAll();
+      }
+    };
+    saveBtn.addEventListener('click', commitRename);
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') commitRename();
+      else if (e.key === 'Escape') { this._panelOpen = false; this._renderAll(); }
+    });
+    row.appendChild(inp);
+    row.appendChild(saveBtn);
+    panel.appendChild(row);
+
+    // delete row (hidden when it's the last list)
+    if (lists.length > 1) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn' + (this._confirmDelete ? ' confirming' : '');
+      del.textContent = this._confirmDelete ? 'Tap again to delete list & items' : 'Delete list';
+      del.addEventListener('click', () => {
+        if (!this._confirmDelete) {
+          this._confirmDelete = true;
+          del.classList.add('confirming');
+          del.textContent = 'Tap again to delete list & items';
+          clearTimeout(this._confirmDelT);
+          this._confirmDelT = setTimeout(() => { this._confirmDelete = false; this._renderAll(); }, 3000);
+        } else {
+          clearTimeout(this._confirmDelT);
+          this._confirmDelete = false;
+          const id = list.id;
+          const remaining = lists.filter(l => l.id !== id);
+          App.store.data.settings.shoppingLists = remaining;
+          App.store.data.shopping = (App.store.data.shopping || []).filter(i => i.listId !== id);
+          this._activeListId = remaining[0].id;
+          this._panelOpen = false;
+          App.store.save();
+          App.ui.toast('List deleted');
+        }
+      });
+      panel.appendChild(del);
+    }
+
+    wrap.appendChild(panel);
+  },
 
   _renderList() {
     const el = this._el;
@@ -2760,7 +2675,7 @@ App.register('shopping', {
     const clearWrap = el.querySelector('#shop-clear-wrap');
     if (!list || !header || !clearWrap) return;
 
-    const items = App.store.data.shopping || [];
+    const items = (App.store.data.shopping || []).filter(i => i.listId === this._activeListId);
     const open = items.filter(i => !i.done);
     const done = items.filter(i => i.done);
 
@@ -2796,7 +2711,8 @@ App.register('shopping', {
         } else {
           clearTimeout(this._confirmT);
           this._confirmClear = false;
-          App.store.data.shopping = App.store.data.shopping.filter(i => !i.done);
+          const active = this._activeListId;
+          App.store.data.shopping = App.store.data.shopping.filter(i => !(i.done && i.listId === active));
           App.store.save();
           App.ui.toast('Basket cleared');
         }

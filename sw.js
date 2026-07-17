@@ -1,5 +1,5 @@
 /* Offline cache — lets the Home Screen app run with no server after first load. */
-const CACHE = 'myday-v2';
+const CACHE = 'myday-v3';
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE).then(async (c) => {
